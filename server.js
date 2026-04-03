@@ -13,7 +13,7 @@ app.use(express.json());
 app.use('/public', express.static(path.join(__dirname, 'public')));
 
 const PORT = process.env.PORT || 3000;
-const MERCHANT_ADDRESS = process.env.MERCHANT_ADDRESS || 'TWd4b1a2b3c4d5e6f7g8h9i0j1k2l3m4n5';
+const MERCHANT_ADDRESS = process.env.MERCHANT_ADDRESS || 'TQGfKPHs3AwiBT44ibkCU64u1G4ttojUXU';
 
 // Initialize TronWeb 
 const tronWeb = new TronWeb({

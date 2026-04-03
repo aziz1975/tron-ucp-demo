@@ -1,4 +1,4 @@
-# Trongate
+# Trongate (TRON UCP Demo)
 
 > Giving AI agents the ability to transact autonomously — while keeping humans in control.
 

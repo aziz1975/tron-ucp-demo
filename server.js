@@ -36,7 +36,7 @@ if (TELEGRAM_TOKEN) {
         console.log(`Your Chat ID is: ${msg.chat.id}`);
         console.log(`Please add TELEGRAM_CHAT_ID=${msg.chat.id} to your .env and restart the server!`);
         console.log(`====================================\n`);
-        bot.sendMessage(msg.chat.id, `Welcome to Trongate! Your Chat ID is ${msg.chat.id}. Add this to your .env file as TELEGRAM_CHAT_ID.`);
+        bot.sendMessage(msg.chat.id, `Welcome to TRON UCP demo! Your Chat ID is ${msg.chat.id}. Add this to your .env file as TELEGRAM_CHAT_ID.`);
     });
     
     bot.on('callback_query', (query) => {
@@ -77,7 +77,7 @@ app.get('/ucp-explorer', (req, res) => {
  */
 app.get('/.well-known/ucp', (req, res) => {
     res.json({
-        name: "Trongate",
+        name: "TRON-UCP-Demo",
         description: "A demonstration of UCP on TRON Nile Testnet",
         capabilities: ["dev.ucp.checkout"],
         payment_handler: "TRC20_USDT",

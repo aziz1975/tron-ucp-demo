@@ -1,4 +1,4 @@
-# Trongate (TRON UCP Demo)
+# TRON UCP Demo
 
 > Giving AI agents the ability to transact autonomously — while keeping humans in control.
 
@@ -81,7 +81,7 @@ TELEGRAM_CHAT_ID=123456789
 ### Step 3 — Run
 
 ```sh
-# Terminal 1 — Start the Trongate server
+# Terminal 1 — Start the server
 node server.js
 
 # Terminal 2 — Start the merchant dashboard
@@ -122,7 +122,7 @@ At the same time, giving an AI agent unrestricted access to a wallet is dangerou
 
 ## The Solution
 
-Trongate is a payment infrastructure layer built on the **TRON blockchain** that solves both problems through three interlocking systems:
+This project is a payment infrastructure layer built on the **TRON blockchain** that solves both problems through three interlocking systems:
 
 | Layer | Role |
 |---|---|
@@ -230,7 +230,7 @@ Below is the complete lifecycle of a single payment, from first contact to data 
 sequenceDiagram
     autonumber
     participant Agent as AI Agent
-    participant Gateway as Trongate
+    participant Gateway
     participant Human as Human (Telegram)
     participant TRON as TRON Network
 

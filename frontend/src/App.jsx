@@ -105,7 +105,7 @@ function OverviewTab({ metrics }) {
       <div className="flex items-end justify-between mb-8">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Overview</h1>
-          <p className="text-[#a1a1aa] text-sm mt-1">High-level view of your Trongate performance.</p>
+          <p className="text-[#a1a1aa] text-sm mt-1">High-level view of performance.</p>
         </div>
         <div className="flex items-center gap-3">
           <button className="px-4 py-2 bg-white text-black font-medium text-sm rounded-md hover:bg-gray-100 transition-colors shadow-sm">
@@ -335,7 +335,7 @@ function App() {
             <div className="w-8 h-8 rounded bg-gradient-to-br from-red-600 to-red-900 flex items-center justify-center border border-red-500/50 shadow-[0_0_15px_rgba(220,38,38,0.3)]">
               <span className="text-white font-bold text-lg leading-none mt-[-2px]">♦</span>
             </div>
-            <span className="font-semibold text-lg tracking-tight">Trongate</span>
+            <span className="font-semibold text-lg tracking-tight">TRON UCP Demo</span>
           </div>
           
           <div className="hidden md:flex gap-1 bg-[#18181b] p-1 rounded-md border border-[#27272a]">

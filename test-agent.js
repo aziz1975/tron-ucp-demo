@@ -103,7 +103,7 @@ async function runMockAgent() {
         console.log(`    Amount:   ${challenge.payment_challenge.amount} SUN (15 USDT)\n`);
 
         // Step 4: Autonomous Crypto Wallet Interaction (TRC-20 Transfer)
-        const trc20ContractAddress = 'TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf'; // User's Funded Nile USDT
+        const trc20ContractAddress = 'TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf'; // Nile USDT account
         const destinationAddress = challenge.payment_challenge.receiver_address;
         const amountSun = parseInt(challenge.payment_challenge.amount);
 

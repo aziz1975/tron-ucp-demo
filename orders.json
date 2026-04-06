@@ -455,5 +455,110 @@
     "txHash": "97c5c81f77f9ee4f5ff0f0cb6ec66885659373c045155a57c77a8a092379d55c",
     "createdAt": "2026-04-06T15:13:35.905Z",
     "updatedAt": "2026-04-06T15:14:02.131Z"
+  },
+  {
+    "id": "chk_1775509614233_848",
+    "merchant_order_id": "ord_chk_1775509614233_848",
+    "payment_instrument_id": "pi_chk_1775509614233_848",
+    "buyer": {
+      "id": "agent-rr4y2p01",
+      "type": "autonomous_agent"
+    },
+    "line_items": [
+      {
+        "id": "li_1",
+        "item": {
+          "id": "premium_data_access",
+          "title": "Premium AI Data Access",
+          "price": 15000000,
+          "currency": "USDT"
+        },
+        "quantity": 1,
+        "totals": [
+          {
+            "type": "subtotal",
+            "amount": 15000000,
+            "currency": "USDT"
+          },
+          {
+            "type": "total",
+            "amount": 15000000,
+            "currency": "USDT"
+          }
+        ]
+      }
+    ],
+    "totals": [
+      {
+        "type": "subtotal",
+        "amount": 15000000,
+        "currency": "USDT"
+      },
+      {
+        "type": "total",
+        "amount": 15000000,
+        "currency": "USDT"
+      }
+    ],
+    "currency": "USDT",
+    "total_amount": "15.000000",
+    "amount_in_base_units": 15000000,
+    "status": "PAID",
+    "txHash": "d2c448974ee836de99b3232dd4fb34f35ed174d0db3ba07c354159e5471b2284",
+    "createdAt": "2026-04-06T21:06:54.232Z",
+    "updatedAt": "2026-04-06T21:07:13.422Z",
+    "humanApprovedAt": "2026-04-06T21:07:01.025Z"
+  },
+  {
+    "id": "chk_1775509761574_430",
+    "merchant_order_id": "ord_chk_1775509761574_430",
+    "payment_instrument_id": "pi_chk_1775509761574_430",
+    "buyer": {
+      "id": "agent-6asdl4g5",
+      "type": "autonomous_agent"
+    },
+    "line_items": [
+      {
+        "id": "li_1",
+        "item": {
+          "id": "premium_data_access",
+          "title": "Premium AI Data Access",
+          "price": 15000000,
+          "currency": "USDT"
+        },
+        "quantity": 1,
+        "totals": [
+          {
+            "type": "subtotal",
+            "amount": 15000000,
+            "currency": "USDT"
+          },
+          {
+            "type": "total",
+            "amount": 15000000,
+            "currency": "USDT"
+          }
+        ]
+      }
+    ],
+    "totals": [
+      {
+        "type": "subtotal",
+        "amount": 15000000,
+        "currency": "USDT"
+      },
+      {
+        "type": "total",
+        "amount": 15000000,
+        "currency": "USDT"
+      }
+    ],
+    "currency": "USDT",
+    "total_amount": "15.000000",
+    "amount_in_base_units": 15000000,
+    "status": "REJECTED",
+    "txHash": null,
+    "createdAt": "2026-04-06T21:09:21.574Z",
+    "updatedAt": "2026-04-06T21:09:26.395Z"
   }
 ]

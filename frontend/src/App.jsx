@@ -26,15 +26,15 @@ function AgentDemoModal({ isOpen, onClose }) {
       { msg: '[LLM] Analyzing response... HTTP 402 Payment Required.', delay: 4500, icon: <ShieldCheck className="w-4 h-4 text-red-400" /> },
       { msg: '[LLM] Browsing WWW-Authenticate header. Extracting UCP manifest URL.', delay: 7000, icon: <Search className="w-4 h-4 text-blue-400" /> },
       { msg: 'Fetching Universal Commerce Protocol Manifest...', delay: 9000, icon: <CheckCircle className="w-4 h-4 text-emerald-400" /> },
-      { msg: '[LLM] Manifest parsed. Intent matched: dev.ucp.checkout on TRON Network.', delay: 12500, icon: <CheckCircle className="w-4 h-4 text-emerald-400" /> },
-      { msg: '[LLM] Generating HTTP POST to Request checkout session for 15.00 USDT...', delay: 15500, icon: <Wallet className="w-4 h-4 text-amber-400" /> },
+      { msg: '[LLM] Business profile parsed. Intent matched: dev.ucp.shopping.checkout on TRON.', delay: 12500, icon: <CheckCircle className="w-4 h-4 text-emerald-400" /> },
+      { msg: '[LLM] POST /ucp/v1/checkout-sessions for 15.00 USDT...', delay: 15500, icon: <Wallet className="w-4 h-4 text-amber-400" /> },
       { msg: '🔒 Checkout suspended by Merchant API. Check your phone!', delay: 16500, icon: <ShieldCheck className="w-4 h-4 text-red-500" /> },
       { msg: 'Awaiting human cryptographic approval via Telegram...', delay: 18000, icon: <RefreshCw className="w-4 h-4 text-gray-400 animate-spin" /> },
-      { msg: '🔓 2FA Hit Received! Challenge unlocked.', delay: 30000, icon: <CheckCircle className="w-4 h-4 text-emerald-400" /> },
+      { msg: '🔓 2FA Hit Received! Checkout session updated with transfer instructions.', delay: 30000, icon: <CheckCircle className="w-4 h-4 text-emerald-400" /> },
       { msg: '[LLM] Analyzing payload parameters... Target: TXYZopYRdj...', delay: 33000, icon: <Search className="w-4 h-4 text-blue-400" /> },
       { msg: '[LLM] Formatting TRC20 15 USDT smart contract payload...', delay: 36000, icon: <Activity className="w-4 h-4 text-purple-400" /> },
       { msg: 'Cryptographically signing & broadcasting to Nile Testnet...', delay: 38500, icon: <Terminal className="w-4 h-4 text-blue-400" /> },
-      { msg: 'Submitting receipt to Gateway. Exchanging for Premium Data...', delay: 43000, icon: <Target className="w-4 h-4 text-blue-400" /> },
+      { msg: 'Submitting blockchain receipt to POST /ucp/v1/checkout-sessions/:id/complete...', delay: 43000, icon: <Target className="w-4 h-4 text-blue-400" /> },
       { msg: 'Receipt validated. Premium payload decrypted successfully.', delay: 45000, icon: <CheckCircle className="w-4 h-4 text-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.5)]" /> }
     ];
 
@@ -252,10 +252,10 @@ function DevelopersTab() {
           <h3 className="text-sm font-medium text-white mb-4">Recent API Requests</h3>
           <div className="space-y-4">
             {[ 
-              { code: 200, url: 'POST /api/ucp/checkout/complete', time: '5m' },
-              { code: 200, url: 'POST /api/ucp/checkout/create', time: '5m' },
+              { code: 200, url: 'POST /ucp/v1/checkout-sessions/chk_x/complete', time: '5m' },
+              { code: 201, url: 'POST /ucp/v1/checkout-sessions', time: '5m' },
               { code: 200, url: 'GET /.well-known/ucp', time: '6m' },
-              { code: 400, url: 'POST /api/ucp/checkout/complete', time: '22m' },
+              { code: 400, url: 'POST /ucp/v1/checkout-sessions/chk_x/complete', time: '22m' },
             ].map((log, i) => (
               <div key={i} className="flex justify-between items-start text-xs font-mono border-b border-[#27272a] pb-3 last:border-0 last:pb-0">
                 <div>

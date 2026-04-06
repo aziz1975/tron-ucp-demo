@@ -1,509 +1,611 @@
 # UCP + TRON Detailed Guide for This Repository
 
-This document explains how the current codebase implements a UCP-style checkout flow on top of the TRON blockchain.
+This document explains how the current codebase implements an official-style UCP checkout flow on top of the TRON blockchain.
 
-It is written for readers who want to understand:
+It covers:
 
 - what UCP is
-- what `/.well-known/ucp` and discovery mean
-- what checkout creation, payment challenge, challenge polling, and receipt exchange mean
+- how discovery works through `/.well-known/ucp`
+- what a UCP business profile is
+- what checkout sessions are
+- what payment handlers are
 - how HTTP `402 Payment Required` is used here
-- how the TRON transaction is created and verified
-- what the UCP endpoints are in this repo
-- how TRON fees apply to this flow
+- how Telegram approval fits into the flow
+- how the TRON transaction is built, signed, broadcast, and verified
+- what the UCP-related endpoints are in this repo
+- how fees work on the TRON side
 
-Important: this repository is a demo-oriented, simplified UCP implementation. It follows the main UCP ideas, but it does not fully implement the latest official UCP REST binding shape.
+Important scope note:
+
+- this repo now follows the latest official UCP REST binding shape much more closely than before
+- the checkout API surface is aligned to the official `checkout-sessions` resource model
+- the TRON payment handler itself is still repo-specific, because UCP is payment-rail agnostic and this project chooses TRON Nile + TRC20 USDT as its settlement mechanism
 
 ## 1. What UCP Is
 
-UCP stands for Universal Commerce Protocol. It is an open protocol for letting platforms, agents, and merchants communicate about commerce in a standard way.
+UCP stands for Universal Commerce Protocol.
 
-At a high level, UCP gives an agent a common language to:
+It is an open protocol for standardized machine-to-machine commerce. In practice, it gives a platform, agent, or merchant a common language for:
 
-- discover what a merchant supports
-- create a checkout
-- understand what payment is required
-- complete the checkout
-- continue into post-purchase flows
+- discovery
+- capability negotiation
+- checkout creation
+- payment completion
+- post-payment continuation
 
-In other words:
+UCP does not itself move money on-chain. It defines how systems describe commercial intent and how they coordinate around payment.
 
-- UCP is the protocol and negotiation layer
-- TRON is the settlement layer in this repo
+In this project:
 
-UCP itself does not move money on-chain. Instead, UCP tells the agent what needs to be paid, how the merchant expects the payment flow to work, and what proof is needed afterward.
+- UCP is the commerce protocol and API contract
+- TRON is the blockchain settlement rail
 
-## 2. How UCP and TRON Are Connected Here
+That separation is important:
 
-In this repo, the connection between UCP and TRON is simple:
+- UCP tells the agent what service exists, what capability is offered, and how to drive the checkout flow
+- TRON is where the actual USDT transfer is signed and broadcast
 
-1. The merchant exposes a manifest at `/.well-known/ucp`
-2. That manifest tells the agent that payment is done with `TRC20_USDT` on `TRON_NILE`
-3. The merchant later returns a payment challenge containing the destination address and amount
-4. The agent uses `TronWeb` to call `transfer(address,uint256)` on the TRC20 USDT contract
-5. The agent sends the resulting `transactionHash` back to the merchant
-6. The merchant verifies the transaction on TRON and unlocks the protected resource
+## 2. How UCP and TRON Are Connected in This Repo
 
-So the mapping is:
+The current repo uses UCP for orchestration and TRON for settlement.
 
-- UCP says what to pay and how to continue
-- TRON is where the actual token transfer happens
+At a high level:
 
-## 3. Important Note: Official UCP vs This Repo
+1. The merchant publishes a UCP business profile at `/.well-known/ucp`
+2. That profile advertises the official checkout capability `dev.ucp.shopping.checkout`
+3. The profile also points to a shopping service endpoint at `/ucp/v1`
+4. The agent creates a checkout session at `/ucp/v1/checkout-sessions`
+5. The checkout session includes a selected payment instrument that describes the TRON payment details
+6. The agent uses `TronWeb` to make a TRC20 `transfer(address,uint256)` call
+7. The agent completes the checkout session by submitting the blockchain receipt
+8. The merchant verifies the TRON transaction and marks the checkout completed
 
-The official UCP docs describe a richer and more formal discovery profile and REST binding. For example, the current official docs describe:
+So the link is:
 
-- a business profile at `/.well-known/ucp`
-- service and capability negotiation
-- official REST operations like `/checkout-sessions`, `GET /checkout-sessions/{id}`, and `POST /checkout-sessions/{id}/complete`
-- capability names such as `dev.ucp.shopping.checkout`
+- UCP describes and structures the checkout
+- TRON executes the token transfer that satisfies it
 
-This repo uses a simplified, custom shape:
+## 3. Official UCP vs This Repo
 
-- the manifest is a small JSON document instead of the fuller official profile structure
-- the capability is `dev.ucp.checkout` instead of the current official `dev.ucp.shopping.checkout`
-- the checkout endpoints are custom:
-  - `POST /api/ucp/checkout/create`
-  - `GET /api/ucp/checkout/challenge/:orderId`
-  - `POST /api/ucp/checkout/complete`
+This repo now uses the latest official-style UCP REST binding shape for discovery and checkout resources.
 
-That means this code is best understood as:
+Specifically, it now uses:
 
-- UCP-inspired
-- UCP-concept aligned
-- not a full implementation of the latest official UCP REST binding
+- a business profile at `GET /.well-known/ucp`
+- a service declaration for `dev.ucp.shopping`
+- the official checkout capability `dev.ucp.shopping.checkout`
+- a checkout session resource under `/ucp/v1/checkout-sessions`
 
-This distinction matters when comparing this project to the official spec.
+That is a major improvement over the older repo shape, which used:
 
-## 4. Core Terms Used in This Repo
+- `dev.ucp.checkout`
+- `POST /api/ucp/checkout/create`
+- `GET /api/ucp/checkout/challenge/:orderId`
+- `POST /api/ucp/checkout/complete`
+
+What remains custom:
+
+- the TRON payment handler definition
+- the exact payment instrument display fields used to carry TRON transfer details
+- the Telegram human approval step
+- the use of the TRON `txHash` as the protected-resource receipt token
+
+So the right way to think about the repo now is:
+
+- official-style UCP business profile and checkout-session API
+- repo-specific TRON settlement adapter layered into that structure
+
+## 4. Core Terms in the Current Codebase
 
 ### 4.1 `/.well-known/ucp`
 
-This is the discovery document endpoint.
+This is the UCP discovery endpoint.
 
-In internet protocols, `/.well-known/...` is a standard place to publish machine-readable metadata. In UCP, that is where a merchant publishes its profile.
+In internet protocols, `/.well-known/...` is the standard place to publish machine-readable metadata. In UCP, that location publishes the merchant's business profile.
 
-In this codebase, the server exposes:
+In this repo, `GET /.well-known/ucp` is implemented in `server.js` and returns a business profile built by `buildBusinessProfile(req)`.
 
-```js
-app.get('/.well-known/ucp', (req, res) => {
-  res.json({
-    name: "TRON-UCP-Demo",
-    description: "A demonstration of UCP on TRON Nile Testnet",
-    capabilities: ["dev.ucp.checkout"],
-    payment_handler: "TRC20_USDT",
-    receiver_address: MERCHANT_ADDRESS,
-    network: "TRON_NILE"
-  });
-});
-```
+That business profile includes:
 
-Meaning of the fields here:
+- merchant name and description
+- UCP version
+- declared services
+- declared capabilities
+- declared payment handlers
 
-- `capabilities`: what the merchant says it supports
-- `payment_handler`: which payment instrument/rail is expected
-- `receiver_address`: merchant wallet address to receive funds
-- `network`: which TRON network to use
+### 4.2 Business Profile
 
-This endpoint is implemented in `server.js`.
+The business profile is the JSON document returned from `/.well-known/ucp`.
 
-### 4.2 Discovery
-
-Discovery is the step where an agent learns how to interact with the merchant.
-
-In this repo, discovery works like this:
-
-1. The agent calls the premium endpoint without payment
-2. The server returns HTTP `402`
-3. The response includes a `WWW-Authenticate` header pointing to `/.well-known/ucp`
-4. The agent fetches that URL and reads the manifest
-
-So discovery here is not an abstract idea. It is the concrete process of:
-
-- receiving the manifest URL
-- loading the manifest
-- deciding how to continue
-
-### 4.3 UCP Manifest
-
-The UCP manifest is the JSON document returned by `GET /.well-known/ucp`.
-
-In this repo, it is the merchant's published payment profile.
-
-The agent reads it to answer:
-
-- Does this merchant support checkout?
-- What network should I use?
-- What token should I use?
-- Which address should receive the payment?
-
-### 4.4 `ucpManifestUrl`
-
-In the agent code, `ucpManifestUrl` is just the variable that stores the manifest URL discovered from the `402` response.
-
-Relevant code:
-
-```js
-const wwwAuth = error.response.headers['www-authenticate'];
-
-if (wwwAuth && wwwAuth.includes('UCP url=')) {
-  ucpManifestUrl = wwwAuth.split('url="')[1].split('"')[0];
-} else {
-  ucpManifestUrl = error.response.data.ucp_manifest;
-}
-```
-
-This lives in `test-agent.js`.
-
-Its purpose is simple:
-
-- extract the merchant's UCP manifest location
-- fetch it
-- continue with checkout
-
-### 4.5 Checkout Creation
-
-Checkout creation is the step where the agent tells the merchant what it wants to buy and asks the merchant to open a payment session.
-
-In this repo:
-
-- endpoint: `POST /api/ucp/checkout/create`
-- role: create an order record and prepare the payment flow
-
-The agent sends:
-
-```js
-createRes = await axios.post(checkoutUrl, {
-  items,
-  total_amount: 15.00,
-  chain: 'TRON_NILE',
-  currency: 'USDT',
-  customer_hash: AGENT_ID
-});
-```
-
-The server:
-
-- validates the request
-- creates an order ID
-- converts the requested amount into TRC20 base units
-- stores order state in `orders.json`
-- suspends the flow until 2FA approval is complete
-
-### 4.6 Challenge
-
-A challenge is the merchant telling the agent: "Here is exactly what you must do next."
-
-In this repo, there are two challenge stages:
-
-- the initial "waiting for human approval" state
-- the released payment challenge after approval
-
-### 4.7 Payment Challenge
-
-The payment challenge is the concrete instruction set the agent uses to build the blockchain transaction.
-
-In this repo it looks like:
+In the current server, it looks conceptually like this:
 
 ```json
 {
-  "orderId": "ORD-...",
-  "status": "PENDING",
-  "payment_challenge": {
-    "receiver_address": "T...",
-    "amount": "15000000",
-    "currency": "TRC20_USDT",
-    "network": "TRON_NILE"
+  "name": "TRON UCP Demo Merchant",
+  "description": "A TRON Nile UCP checkout demo aligned to the official UCP checkout session REST shape.",
+  "url": "http://localhost:8000",
+  "ucp": {
+    "version": "2026-01-23",
+    "services": {
+      "dev.ucp.shopping": [
+        {
+          "version": "2026-01-23",
+          "endpoint": "http://localhost:8000/ucp/v1",
+          "spec": "https://ucp.dev/latest/specification/checkout-rest/"
+        }
+      ]
+    },
+    "capabilities": {
+      "dev.ucp.shopping.checkout": [
+        {
+          "version": "2026-01-23",
+          "spec": "https://ucp.dev/latest/specification/checkout/",
+          "schema": "https://ucp.dev/2026-01-23/schemas/shopping/checkout.json"
+        }
+      ]
+    },
+    "payment_handlers": {
+      "localhost.tron.trc20_usdt": [
+        {
+          "version": "1.0.0",
+          "spec": "http://localhost:8000/public/tron-nile-trc20-usdt-handler.json",
+          "schema": "http://localhost:8000/public/tron-nile-trc20-usdt-handler.schema.json"
+        }
+      ]
+    }
   }
 }
 ```
 
-Meaning:
+This profile tells the agent:
 
-- `receiver_address`: where the agent must send funds
-- `amount`: base units for the token transfer
-- `currency`: expected asset format
-- `network`: which network the agent must use
+- what version of UCP the merchant is speaking
+- where the checkout REST service lives
+- what checkout capability is offered
+- which payment handlers exist
 
-This is what links UCP to TRON in the current implementation.
+### 4.3 Discovery
 
-### 4.8 Receipt Exchange
+Discovery is the process by which the agent learns how to interact with the merchant.
 
-Receipt exchange is the step where the agent proves to the merchant that payment happened.
+In this repo, discovery works like this:
 
-In this repo, the receipt is the TRON transaction hash:
+1. The agent requests the protected resource
+2. The server returns HTTP `402 Payment Required`
+3. The response includes a `WWW-Authenticate` header with the UCP profile URL
+4. The agent fetches `/.well-known/ucp`
+5. The agent reads the business profile
+6. The agent extracts the shopping service endpoint and capability information
 
-- the agent broadcasts a TRON transaction
-- the agent gets `txHash`
-- the agent sends `orderId + txHash` to the backend
-- the backend verifies the transaction independently
+So discovery here is not abstract. It is the concrete path from:
 
-After successful verification, the agent uses the same `txHash` as an authorization receipt:
+- `402`
+- to `/.well-known/ucp`
+- to `ucp.services.dev.ucp.shopping[0].endpoint`
+
+### 4.4 `ucpManifestUrl`
+
+The agent code still uses the variable name `ucpManifestUrl`, but in the current implementation it now actually refers to the UCP business profile URL, not the old flat custom manifest.
+
+In `test-agent.js`:
 
 ```js
-const premiumRes = await axios.get(`${MERCHAT_BASE_URL}/api/premium-data`, {
-  headers: {
-    'Authorization': `UCP ${txHash}`
-  }
-});
+const wwwAuth = error.response.headers['www-authenticate'];
+if (wwwAuth && wwwAuth.indexOf('UCP url=') !== -1) {
+  ucpManifestUrl = wwwAuth.split('url="')[1].split('"')[0];
+} else {
+  ucpManifestUrl = error.response.data.ucp_profile;
+}
 ```
 
-This "use the transaction hash as the receipt token" design is custom to this repo.
+That variable now points to:
 
-## 5. UCP Endpoints in This Repository
+- `http://localhost:8000/.well-known/ucp`
+
+### 4.5 Services
+
+In UCP, a service is how the business profile tells the client where a particular interaction model lives.
+
+This repo declares:
+
+- `dev.ucp.shopping`
+
+with endpoint:
+
+- `http://localhost:8000/ucp/v1`
+
+The agent reads that value and then builds resource URLs under that base.
+
+### 4.6 Capabilities
+
+A capability tells the client what the merchant supports.
+
+This repo now declares the official checkout capability:
+
+- `dev.ucp.shopping.checkout`
+
+That tells the agent the merchant supports the standardized checkout flow.
+
+### 4.7 Payment Handler
+
+The payment handler tells the client how payment is expected to be satisfied.
+
+In this repo, the payment handler is custom and TRON-specific:
+
+- handler id: `localhost.tron.trc20_usdt`
+
+The business profile points to:
+
+- `public/tron-nile-trc20-usdt-handler.json`
+- `public/tron-nile-trc20-usdt-handler.schema.json`
+
+Those files describe the TRON-specific payment method used by the checkout session.
+
+### 4.8 Handler ID Consistency
+
+The payment handler id must stay consistent across the whole flow.
+
+In this repo, the handler id is:
+
+- `localhost.tron.trc20_usdt`
+
+That same id must appear in three places:
+
+1. In the UCP business profile under `ucp.payment_handlers`
+2. In the checkout session under the selected payment instrument's `handler_id`
+3. In the agent logic when it decides which payment metadata and receipt format to use
+
+Why this matters:
+
+- the business profile tells the agent what payment handlers exist
+- the checkout session tells the agent which one is selected for this specific purchase
+- the agent must match those two pieces correctly so it can interpret the transfer instructions and submit the correct receipt shape
+
+So the rule is:
+
+- the handler id published at discovery time
+- the handler id attached to the checkout session
+- and the handler metadata the agent uses
+
+must all refer to the same payment method.
+
+### 4.9 Checkout Session
+
+A checkout session is the main resource in the official-style flow.
+
+It is the server-side object that represents:
+
+- what the buyer wants
+- what the merchant expects to be paid
+- the current payment state
+- what payment instrument should be used
+- whether the session is incomplete, completed, or canceled
+
+In this repo, checkout sessions are stored in `orders.json` using `db.js`, but exposed through official-style REST endpoints.
+
+### 4.10 Payment Instrument
+
+Inside a checkout session response, this repo returns:
+
+- `payment.instruments`
+
+The selected instrument carries the TRON transfer data in its `display` fields:
+
+- network
+- asset
+- contract address
+- receiver address
+- amount
+- amount in decimal
+- transfer state
+
+This is the current repo's bridge between the UCP session model and TRON settlement details.
+
+### 4.11 Challenge
+
+In the old repo, a "challenge" was a separate custom endpoint response.
+
+In the new implementation, the standalone challenge endpoint is gone.
+
+Conceptually, the challenge still exists, but it is now represented as:
+
+- checkout session state
+- selected payment instrument data
+- payment handler config
+
+So instead of a separate `payment_challenge` document, the agent now polls the checkout session resource until the selected payment instrument has `transfer_state: ready_for_transfer`.
+
+### 4.12 Receipt Exchange
+
+Receipt exchange is still present, but now it happens through:
+
+- `POST /ucp/v1/checkout-sessions/:id/complete`
+
+The receipt submitted by the agent is the blockchain transaction hash:
+
+```json
+{
+  "payment": {
+    "instruments": [
+      {
+        "credential": {
+          "type": "blockchain_receipt",
+          "transaction_hash": "..."
+        }
+      }
+    ]
+  }
+}
+```
+
+That is then verified by the backend against TRON.
+
+## 5. UCP-Related Endpoints in This Repository
 
 This repo has both:
 
 - UCP-related endpoints
-- non-UCP helper/demo endpoints
+- non-UCP helper endpoints
 
 ### 5.1 `GET /.well-known/ucp`
 
 Role:
 
-- merchant discovery
-- tells the agent what the merchant supports
+- discovery endpoint
+- returns the UCP business profile
 
-Returns:
+The agent uses it to learn:
 
-- capability
-- payment handler
-- receiver address
-- network
+- the UCP version
+- the shopping service endpoint
+- the checkout capability
+- the payment handler
 
-### 5.2 `POST /api/ucp/checkout/create`
-
-Role:
-
-- starts a checkout
-- creates the order
-- stores initial order state
-- triggers Telegram approval or mock approval flow
-
-Possible result:
-
-- `202 AWAITING_2FA`
-
-### 5.3 `GET /api/ucp/checkout/challenge/:orderId`
+### 5.2 `POST /ucp/v1/checkout-sessions`
 
 Role:
 
-- polling endpoint
-- used by the agent to check whether human approval has happened yet
+- create a checkout session
+- normalize requested line items
+- compute totals
+- create internal order state
+- trigger Telegram approval workflow
 
-Possible outcomes:
+This is the official-style replacement for the old custom `checkout/create` endpoint.
 
-- `202 AWAITING_2FA`
-- `403 REJECTED`
-- `200` with a payment challenge
-
-This endpoint is not part of the current official UCP REST binding. It is a custom endpoint in this repo to support the Telegram human-in-the-loop approval model.
-
-### 5.4 `POST /api/ucp/checkout/complete`
+### 5.3 `GET /ucp/v1/checkout-sessions/:id`
 
 Role:
 
-- accepts the order ID and transaction hash
-- verifies the transaction on TRON
-- marks the order as `PAID` or `FAILED`
+- fetch current checkout session state
+- allow the agent to poll until payment is ready
 
-This endpoint is the bridge between:
+The agent uses this endpoint instead of the old custom challenge polling endpoint.
 
-- off-chain commerce orchestration
-- on-chain settlement proof
-
-### 5.5 `GET /api/premium-data`
+### 5.4 `PUT /ucp/v1/checkout-sessions/:id`
 
 Role:
 
-- protected resource
-- acts as the paywalled API
+- update buyer or line-item data before the session is completed
+- reset approval/payment state if line items change
 
-Not a UCP endpoint itself, but it is the endpoint that triggers the UCP flow through an HTTP `402`.
+This aligns the repo more closely with the official resource model even though the demo agent does not currently use this path.
 
-### 5.6 Demo/Helper Endpoints
+### 5.5 `POST /ucp/v1/checkout-sessions/:id/complete`
 
-These are not UCP endpoints:
+Role:
+
+- accept payment receipt data
+- extract the blockchain transaction hash
+- verify the payment on TRON
+- transition the session to completed if valid
+
+This is the bridge between UCP orchestration and blockchain settlement proof.
+
+### 5.6 `POST /ucp/v1/checkout-sessions/:id/cancel`
+
+Role:
+
+- cancel an incomplete session
+- prevent further payment completion attempts
+
+### 5.7 `GET /api/premium-data`
+
+Role:
+
+- protected premium API resource
+- triggers the UCP flow through HTTP `402`
+- later accepts the receipt token in `Authorization: UCP <txHash>`
+
+This is not itself a UCP endpoint, but it is the entry point into the commerce flow.
+
+### 5.8 Demo/Helper Endpoints
+
+These are not official UCP endpoints:
 
 - `POST /api/demo/approve-2fa/:orderId`
-  - local approval shortcut when Telegram is not used
+  - local mock approval shortcut if Telegram is not configured
 - `POST /api/demo/run-agent`
   - launches the demo agent script
 - `GET /api/orders`
-  - dashboard data for the UI
+  - dashboard support endpoint
 
-## 6. Full End-to-End Flow in This Repo
+## 6. Full End-to-End Flow in the Current Repo
 
-### Step 1. Agent hits the paywalled API
+### Step 1. Agent hits the protected API
 
-The agent first tries to access:
+The agent requests:
 
 - `GET /api/premium-data`
 
-Because it has not paid yet, the server returns:
+Without a valid receipt, the server responds with HTTP `402 Payment Required` and includes a UCP profile URL.
 
-- HTTP `402 Payment Required`
-- `WWW-Authenticate: UCP url="http://localhost:8000/.well-known/ucp"`
-
-Server code:
+Current server behavior:
 
 ```js
 if (!authHeader || !authHeader.startsWith('UCP ')) {
-  res.setHeader('WWW-Authenticate', `UCP url="http://localhost:${PORT}/.well-known/ucp"`);
+  const profileUrl = `${getBaseUrl(req)}/.well-known/ucp`;
+  res.setHeader('WWW-Authenticate', `UCP url="${profileUrl}"`);
   return res.status(402).json({
-    error: "Payment Required",
-    message: "Premium AI Endpoint. Complete UCP checkout.",
-    cost: "15 USDT",
-    currency: "TRX_USDT",
-    ucp_manifest: `http://localhost:${PORT}/.well-known/ucp`
+    error: 'Payment Required',
+    message: 'Premium AI Endpoint. Complete a UCP checkout session before retrying.',
+    ucp_profile: profileUrl,
+    checkout_service: `${getServiceBaseUrl(req)}/checkout-sessions`
   });
 }
 ```
 
 ### Step 2. Agent performs discovery
 
-The agent sees the `402`, parses the header, extracts `ucpManifestUrl`, and fetches the manifest:
+The agent parses the `WWW-Authenticate` header, extracts the business profile URL, and fetches it:
 
 ```js
-await axios.get(`${MERCHAT_BASE_URL}/api/premium-data`);
-
-const wwwAuth = error.response.headers['www-authenticate'];
-if (wwwAuth && wwwAuth.includes('UCP url=')) {
-  ucpManifestUrl = wwwAuth.split('url="')[1].split('"')[0];
-}
-
-const manifestRes = await axios.get(ucpManifestUrl);
+const manifestRes = await axios.get(ucpManifestUrl, {
+  headers: getUcpAgentHeaders()
+});
 const manifest = manifestRes.data;
 ```
 
-Now the agent knows:
+It then reads:
 
-- checkout is supported
-- payment uses TRC20 USDT
-- network is TRON Nile
-- merchant wallet address
+- `manifest.ucp.services.dev.ucp.shopping[0].endpoint`
+- `manifest.ucp.capabilities.dev.ucp.shopping.checkout`
 
-### Step 3. Agent creates checkout
+That tells the agent:
 
-The agent asks the merchant to open a checkout session:
+- where the checkout service lives
+- that the merchant supports checkout
+
+### Step 3. Agent creates a checkout session
+
+The agent creates a session by calling:
+
+- `POST /ucp/v1/checkout-sessions`
+
+Example agent request:
 
 ```js
-createRes = await axios.post(checkoutUrl, {
-  items,
-  total_amount: 15.00,
-  chain: 'TRON_NILE',
-  currency: 'USDT',
-  customer_hash: AGENT_ID
+const createRes = await axios.post(checkoutSessionsUrl, {
+  buyer: {
+    id: AGENT_ID,
+    type: 'autonomous_agent'
+  },
+  line_items: [{
+    item: { id: 'premium_data_access' },
+    quantity: 1
+  }]
+}, {
+  headers: getUcpAgentHeaders()
 });
 ```
 
 The server:
 
-- creates `orderId`
-- converts `15.00` USDT into `15_000_000` token base units
-- stores the order in `orders.json`
-- marks it `AWAITING_2FA`
+- normalizes line items
+- looks up item pricing from the local catalog
+- computes totals
+- creates an internal checkout session id
+- stores state in `orders.json`
+- marks the internal order as `AWAITING_2FA`
+- sends Telegram approval or prints a mock approval command
 
-### Step 4. Human approval gates the flow
+### Step 4. Human approval blocks payment readiness
 
-The server does not immediately release the payment challenge.
+The session exists immediately, but the transfer is not ready until a human approves it.
 
-Instead it:
+This repo uses Telegram as the real approval mode:
 
-- sends a Telegram approval message, or
-- prints a local mock approval command
+- the server sends an inline Telegram message
+- the user taps Approve or Reject
 
-Server response:
+If Telegram is not configured, the server prints a local `curl` command for approval testing.
 
-```js
-return res.status(202).json({
-  orderId: newOrder.id,
-  status: "AWAITING_2FA",
-  message: "Checkout suspended. Awaiting cryptographically signed human approval via Telegram.",
-  poll_url: `/api/ucp/checkout/challenge/${orderId}`
-});
-```
+This is repo-specific business logic layered on top of the checkout session resource.
 
-This is the human-in-the-loop control layer.
+### Step 5. Agent polls the checkout session
 
-### Step 5. Agent polls for the challenge
+The agent now polls:
 
-The agent repeatedly calls:
+- `GET /ucp/v1/checkout-sessions/:id`
 
-- `GET /api/ucp/checkout/challenge/:orderId`
+It waits until the selected payment instrument says:
 
-Until the backend returns the actual payment challenge.
+- `transfer_state: ready_for_transfer`
 
 Relevant agent logic:
 
 ```js
-const pollUrl = `${MERCHAT_BASE_URL}${initialChallenge.poll_url}`;
+while (checkoutSession.status === 'incomplete') {
+  const paymentInstrument = getSelectedPaymentInstrument(checkoutSession);
+  const display = paymentInstrument ? paymentInstrument.display || {} : {};
+  const transferState = display.transfer_state;
 
-let approved = false;
-while (!approved) {
-  await sleep(2000);
-  const pollRes = await axios.get(pollUrl);
-  if (pollRes.status === 200) {
-    challenge = pollRes.data;
-    approved = true;
+  if (transferState === 'ready_for_transfer') {
+    break;
+  }
+
+  const pollRes = await axios.get(`${checkoutSessionsUrl}/${checkoutSession.id}`, {
+    headers: getUcpAgentHeaders()
+  });
+  checkoutSession = pollRes.data;
+}
+```
+
+This replaces the old standalone challenge endpoint.
+
+### Step 6. Agent reads the payment instrument
+
+Once the session is ready, the selected payment instrument provides the TRON transfer details:
+
+```json
+{
+  "id": "pi_...",
+  "type": "blockchain_transfer",
+  "handler_id": "localhost.tron.trc20_usdt",
+  "selected": true,
+  "display": {
+    "network": "TRON_NILE",
+    "asset": "TRC20_USDT",
+    "contract_address": "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf",
+    "receiver_address": "T...",
+    "amount": "15000000",
+    "amount_decimal": "15.000000",
+    "transfer_state": "ready_for_transfer"
   }
 }
 ```
 
-### Step 6. Agent receives payment challenge
-
-Once the order is approved, the backend returns:
-
-```js
-res.json({
-  orderId: order.id,
-  status: order.status,
-  payment_challenge: {
-    receiver_address: MERCHANT_ADDRESS,
-    amount: order.amount_in_sun.toString(),
-    currency: "TRC20_USDT",
-    network: "TRON_NILE"
-  }
-});
-```
-
-This is the point where UCP hands off to TRON.
+This is the current equivalent of the old payment challenge.
 
 ### Step 7. Agent builds the TRON transaction
 
-The agent uses `TronWeb` to trigger the TRC20 token contract:
+The agent uses `TronWeb` to create a smart-contract call:
 
 ```js
-const trc20ContractAddress = TRC20_USDT_CONTRACT;
-const destinationAddress = challenge.payment_challenge.receiver_address;
-const amountSun = parseInt(challenge.payment_challenge.amount);
-
-const parameter = [
-  { type: 'address', value: destinationAddress },
-  { type: 'uint256', value: amountSun }
-];
-
-const ownerAddress = tronWeb.defaultAddress.base58;
-
 const transaction = await tronWeb.transactionBuilder.triggerSmartContract(
-  trc20ContractAddress,
+  contractAddress,
   'transfer(address,uint256)',
   {},
-  parameter,
+  parameters,
   ownerAddress
 );
 ```
 
-What this does:
+Where:
 
-- chooses the TRC20 USDT contract
-- prepares the `transfer(address,uint256)` call
-- inserts the merchant address and required amount
-- creates an unsigned smart-contract transaction for TRON
+- `contractAddress` is the TRC20 USDT contract
+- `parameters[0]` is the merchant receiver address
+- `parameters[1]` is the token amount in base units
+
+This creates an unsigned TRON transaction that calls:
+
+- `transfer(address,uint256)`
+
+on the TRC20 token contract.
 
 ### Step 8. Agent signs and broadcasts
 
-Then the agent signs the transaction with its own private key and broadcasts it:
+The agent signs the transaction locally with its own private key:
 
 ```js
 const signedTx = await tronWeb.trx.sign(transaction.transaction);
@@ -511,144 +613,143 @@ await tronWeb.trx.sendRawTransaction(signedTx);
 const txHash = signedTx.txID;
 ```
 
-This is the actual blockchain payment step.
+This is the actual blockchain payment.
 
-Key point:
+Important properties:
 
-- the private key stays on the agent side
-- the merchant never signs on behalf of the agent
-- the merchant only receives the transaction hash later
+- the agent keeps custody of the key
+- the merchant never holds the agent key
+- only the resulting transaction hash is shared back with the merchant
 
-### Step 9. Agent submits proof to merchant
+### Step 9. Agent completes the checkout session with a receipt
 
-After broadcasting, the agent sends:
+After broadcasting, the agent calls:
 
-```js
-const completeRes = await axios.post(completeUrl, {
-  orderId: challenge.orderId,
-  transactionHash: txHash
-});
-```
+- `POST /ucp/v1/checkout-sessions/:id/complete`
 
-Now the merchant can independently verify the on-chain transaction.
-
-### Step 10. Merchant verifies transaction on TRON
-
-The backend uses `TronWeb` to fetch the transaction:
+It sends the transaction hash as a blockchain receipt:
 
 ```js
-transaction = await tronWeb.trx.getTransaction(transactionHash);
-```
-
-The backend then checks:
-
-- transaction exists
-- transaction result is `SUCCESS`
-- transaction type is `TriggerSmartContract`
-- calldata starts with TRC20 `transfer(address,uint256)` selector
-- token contract matches expected USDT contract
-- recipient matches `MERCHANT_ADDRESS`
-- amount matches `order.amount_in_sun`
-
-Current verification logic:
-
-```js
-const parameter = contractData.parameter.value;
-const decodedTransfer = decodeTrc20TransferData(parameter.data);
-
-const paidTokenContract = normalizeAddress(parameter.contract_address);
-if (paidTokenContract !== EXPECTED_USDT_CONTRACT) {
-  return failOrder(400, "Transaction targets an unexpected token contract.");
-}
-
-if (decodedTransfer.recipient !== MERCHANT_ADDRESS) {
-  return failOrder(400, "Transaction recipient does not match the merchant address.");
-}
-
-if (decodedTransfer.amount !== String(order.amount_in_sun)) {
-  return failOrder(400, "Transaction amount does not match the checkout amount.");
-}
-```
-
-If verification passes, the order becomes `PAID`.
-
-### Step 11. Agent exchanges receipt for protected data
-
-Finally, the agent uses the transaction hash as a receipt:
-
-```js
-const premiumRes = await axios.get(`${MERCHAT_BASE_URL}/api/premium-data`, {
-  headers: {
-    'Authorization': `UCP ${txHash}`
+const completeRes = await axios.post(`${checkoutSessionsUrl}/${checkoutSession.id}/complete`, {
+  payment: {
+    instruments: [{
+      id: paymentInstrument.id,
+      selected: true,
+      handler_id: paymentInstrument.handler_id,
+      credential: {
+        type: 'blockchain_receipt',
+        transaction_hash: txHash
+      }
+    }]
   }
 });
 ```
 
-The backend checks whether:
+### Step 10. Merchant verifies the TRON payment
 
-- there is an order with that `txHash`
-- the order status is `PAID`
+The backend then:
 
-If yes, the premium payload is returned.
+1. fetches the transaction from TRON
+2. checks that it succeeded
+3. checks that it is a `TriggerSmartContract`
+4. checks that the token contract is the expected USDT contract
+5. decodes the transfer calldata
+6. checks that the recipient matches `MERCHANT_ADDRESS`
+7. checks that the amount matches the checkout session amount
+
+Relevant logic:
+
+```js
+const contractData = transaction.raw_data.contract[0];
+const parameter = contractData.parameter.value;
+const decodedTransfer = decodeTrc20TransferData(parameter.data);
+
+const paidTokenContract = normalizeAddress(parameter.contract_address);
+if (paidTokenContract !== TRC20_USDT_CONTRACT) {
+  return failOrder(400, 'Transaction targets an unexpected token contract.');
+}
+
+if (decodedTransfer.recipient !== MERCHANT_ADDRESS) {
+  return failOrder(400, 'Transaction recipient does not match the merchant address.');
+}
+
+if (decodedTransfer.amount !== String(order.amount_in_base_units)) {
+  return failOrder(400, 'Transaction amount does not match the checkout amount.');
+}
+```
+
+If the transaction is valid, the session becomes completed.
+
+### Step 11. Agent redeems the receipt at the premium API
+
+After successful verification, the agent can access the protected endpoint by sending:
+
+```js
+Authorization: UCP <txHash>
+```
+
+The server looks up the internal order by `txHash` and checks that its status is `PAID`.
+
+If valid, the premium response is returned.
 
 ## 7. How HTTP 402 Is Implemented Here
 
 This repo implements HTTP `402 Payment Required` directly in Express.
 
-Important distinction:
+Important points:
 
-- `402` itself is a standard HTTP status code
-- this repo uses it as a custom UCP-oriented paywall signal
-- this specific `WWW-Authenticate: UCP url="..."` pattern is application-specific
+- `402` is a standard HTTP status code
+- UCP does not "own" the status code
+- this repo uses `402` as the machine-readable entry point into the UCP discovery flow
 
-So in this repo, `402` is:
+So this implementation is:
 
-- not generated by a UCP SDK
-- not generated by a TRON library
-- not a separate "Bank of AI" protocol layer
-- simply returned by the app code in `server.js`
+- application code
+- UCP-oriented in design
+- not a special UCP runtime primitive by itself
 
-The implementation is:
+Current implementation:
 
 ```js
 if (!authHeader || !authHeader.startsWith('UCP ')) {
-  res.setHeader('WWW-Authenticate', `UCP url="http://localhost:${PORT}/.well-known/ucp"`);
+  const profileUrl = `${getBaseUrl(req)}/.well-known/ucp`;
+  res.setHeader('WWW-Authenticate', `UCP url="${profileUrl}"`);
   return res.status(402).json({
-    error: "Payment Required",
-    message: "Premium AI Endpoint. Complete UCP checkout.",
-    cost: "15 USDT",
-    currency: "TRX_USDT",
-    ucp_manifest: `http://localhost:${PORT}/.well-known/ucp`
+    error: 'Payment Required',
+    message: 'Premium AI Endpoint. Complete a UCP checkout session before retrying.',
+    ucp_profile: profileUrl,
+    checkout_service: `${getServiceBaseUrl(req)}/checkout-sessions`
   });
 }
 ```
 
-What this means in practice:
+What this does:
 
-- the resource is not available yet
-- the response tells the agent where to fetch the merchant's UCP metadata
-- the agent can continue the flow without human HTML forms
+- signals payment is required
+- points the agent to the UCP business profile
+- gives the agent enough data to begin discovery
 
-Official UCP note:
-
-The current official UCP REST binding documents standard checkout operations and standard HTTP status usage, but this exact `402 + WWW-Authenticate: UCP url=...` pattern is a design choice in this repo rather than a required official UCP REST operation.
+The exact `WWW-Authenticate: UCP url="..."` pattern is a design choice used by this repo to make discovery easy for the demo agent.
 
 ## 8. How the TRON Transaction Happens in Code
 
-The actual payment transaction is a TRC20 smart contract call on TRON Nile.
+The actual payment is a TRC20 smart-contract call on TRON Nile.
 
-The agent targets the TRC20 USDT contract and invokes:
+The agent uses:
 
+- `triggerSmartContract`
 - `transfer(address,uint256)`
+- `sign`
+- `sendRawTransaction`
 
-The core code is:
+Core flow:
 
 ```js
 const transaction = await tronWeb.transactionBuilder.triggerSmartContract(
-  trc20ContractAddress,
+  contractAddress,
   'transfer(address,uint256)',
   {},
-  parameter,
+  parameters,
   ownerAddress
 );
 
@@ -660,25 +761,23 @@ const txHash = signedTx.txID;
 Breaking this down:
 
 - `triggerSmartContract(...)`
-  - constructs the TRON transaction for a smart contract call
-- `transfer(address,uint256)`
-  - the standard TRC20 token transfer method
-- `parameter`
-  - includes destination address and amount
+  - creates a TRON smart-contract transaction
+- `'transfer(address,uint256)'`
+  - calls the TRC20 token transfer method
+- `parameters`
+  - contain destination address and amount
 - `sign(...)`
-  - signs the transaction with the agent's private key
+  - signs with the agent's private key
 - `sendRawTransaction(...)`
-  - broadcasts the signed transaction to the network
+  - broadcasts to TRON Nile
 - `txID`
-  - becomes the receipt reference used later in the UCP flow
+  - becomes the blockchain receipt reference
 
-This means the merchant does not receive custody of the agent's funds or private key.
+## 9. How the Backend Decodes and Verifies the Transfer
 
-## 9. How the Backend Decodes the TRON Transfer
+The backend does not blindly trust the agent.
 
-The backend checks that the transaction is really the expected token transfer.
-
-It decodes TRC20 calldata from the `TriggerSmartContract` transaction:
+It independently decodes the TRC20 calldata:
 
 ```js
 const decodeTrc20TransferData = (data) => {
@@ -702,89 +801,105 @@ const decodeTrc20TransferData = (data) => {
 Why this matters:
 
 - `a9059cbb` is the function selector for `transfer(address,uint256)`
-- the next 32 bytes encode the recipient
-- the next 32 bytes encode the amount
+- the next 32 bytes are the recipient
+- the next 32 bytes are the amount
 
-That lets the backend verify the transfer details against the checkout order.
+That lets the backend compare the on-chain payment with the checkout session the merchant created.
 
-## 10. How Fees Work at the TRON Level Here
+## 10. How Telegram Approval Fits In
 
-This repo uses TRON smart contract execution, not a native TRX transfer.
+Telegram is not part of UCP itself. It is the repo's human-in-the-loop approval layer.
 
-That means the sender is paying for a contract call, which on TRON uses resources such as:
+The current server behavior is:
+
+- when a checkout session is created, the merchant does not immediately release payment readiness
+- instead, the server sends a Telegram inline message with Approve and Reject buttons
+- approval changes internal state to `PENDING`
+- rejection changes internal state to `REJECTED`
+
+The agent then learns this indirectly by polling the checkout session resource:
+
+- `AWAITING_2FA` maps to `transfer_state: awaiting_human_approval`
+- `PENDING` maps to `transfer_state: ready_for_transfer`
+
+So Telegram approval does not add a new UCP endpoint. It changes the state of the checkout session.
+
+## 11. How Fees Work at the TRON Level Here
+
+This repo uses smart-contract execution on TRON, not a simple native TRX transfer.
+
+That means the sender pays chain-level costs through TRON resources such as:
 
 - Bandwidth
 - Energy
 
-### 10.1 Who pays the fee
+### 11.1 Who pays the fee
 
-The sender account pays the chain-level execution cost.
+The sender wallet pays the blockchain execution cost.
 
 In this repo, that is the agent wallet configured by:
 
 - `TRON_PRIVATE_KEY`
 
-The merchant does not pay the blockchain execution fee for the agent's outgoing transfer in this flow.
+The merchant does not pay for the sender's outbound TRC20 transfer.
 
-### 10.2 Why TRC20 transfers cost more than simple TRX transfers
+### 11.2 Why a TRC20 transfer has chain cost
 
-A TRC20 transfer is a smart contract call:
+A TRC20 transfer is a smart-contract call.
 
-- it executes token contract logic
-- that consumes Energy
-- if the sender does not have enough available resources, TRX may be burned to cover it
+That means:
 
-### 10.3 How this repo handles fees
+- token contract logic executes
+- Energy is consumed
+- if resources are insufficient, TRX may be burned to complete execution
 
-This repo does not explicitly estimate or surface fees to the user.
+### 11.3 How the current code handles fees
 
-In the agent transaction builder call:
+The current demo does not explicitly estimate or surface fees.
+
+The transaction builder call is:
 
 ```js
 const transaction = await tronWeb.transactionBuilder.triggerSmartContract(
-  trc20ContractAddress,
+  contractAddress,
   'transfer(address,uint256)',
   {},
-  parameter,
+  parameters,
   ownerAddress
 );
 ```
 
-Notice that the options object is just `{}`.
+The options object is just `{}`.
 
-So this project currently does not:
+So the repo currently does not:
 
 - set an explicit `feeLimit`
-- estimate Energy before sending
-- show expected TRX cost in the UI
+- estimate Energy usage before sending
+- show cost projections in the UI
 
-For a demo on Nile, that may be acceptable if the sender account has enough test resources.
-For production, you would typically want to:
+For a demo on Nile, that can be acceptable if the sender account has enough resources. For production, you would typically want:
 
-- estimate Energy usage
-- set `feeLimit`
-- ensure the sender wallet has enough TRX or staked resources
-- handle `OUT_OF_ENERGY` and other resource failures explicitly
+- Energy estimation
+- explicit `feeLimit`
+- balance/resource checks
+- explicit handling for `OUT_OF_ENERGY` and other execution failures
 
-### 10.4 What can fail at the fee/resource layer
+### 11.4 What can still fail even if UCP is correct
 
-Even if the UCP flow is correct, the TRON transaction can still fail if:
+Even if the UCP flow is perfectly valid, the TRON transaction can still fail if:
 
-- the sender has insufficient TRX
-- the sender has insufficient Energy/Bandwidth
-- `feeLimit` is too low
-- the contract call reverts or runs out of Energy
+- the sender lacks TRX
+- the sender lacks Energy or Bandwidth
+- the smart-contract execution runs out of resources
+- the token contract reverts
 
-So UCP and TRON are separate concerns:
+So UCP correctness and blockchain execution success are related but separate concerns.
 
-- UCP can correctly describe the payment
-- TRON execution can still fail due to chain-level resource constraints
+## 12. Internal State Model
 
-## 11. Orders and State Storage
+Internally, this repo stores sessions in `orders.json` through `db.js`.
 
-The order state is stored in `orders.json` through `db.js`.
-
-Typical statuses in this flow:
+Important internal states include:
 
 - `AWAITING_2FA`
 - `PENDING`
@@ -792,21 +907,15 @@ Typical statuses in this flow:
 - `PAID`
 - `FAILED`
 - `REJECTED`
+- `CANCELED`
 
-This state machine is what lets the backend coordinate:
+These are internal storage states. The public checkout session response maps them into UCP-style session status and payment instrument transfer state.
 
-- agent progress
-- human approval
-- blockchain verification
-- receipt redemption
+## 13. Official UCP Endpoints vs This Repo's Current Endpoints
 
-## 12. Official UCP Endpoints vs This Repo's Endpoints
+### Official UCP checkout REST binding
 
-To avoid confusion, here is the difference.
-
-### Official UCP REST binding shape
-
-The official UCP REST binding documents operations such as:
+The official REST binding describes resource-style operations such as:
 
 - `POST /checkout-sessions`
 - `GET /checkout-sessions/{id}`
@@ -814,27 +923,24 @@ The official UCP REST binding documents operations such as:
 - `POST /checkout-sessions/{id}/complete`
 - `POST /checkout-sessions/{id}/cancel`
 
-These are discovered from the UCP business profile.
+### This repo's current UCP-style implementation
 
-### This repo's custom UCP-style endpoints
-
-This repo instead uses:
+This repo now uses those same resource ideas under the service base:
 
 - `GET /.well-known/ucp`
-- `POST /api/ucp/checkout/create`
-- `GET /api/ucp/checkout/challenge/:orderId`
-- `POST /api/ucp/checkout/complete`
+- `POST /ucp/v1/checkout-sessions`
+- `GET /ucp/v1/checkout-sessions/:id`
+- `PUT /ucp/v1/checkout-sessions/:id`
+- `POST /ucp/v1/checkout-sessions/:id/complete`
+- `POST /ucp/v1/checkout-sessions/:id/cancel`
 
-This means:
+That means the repo is now structurally aligned with the latest official UCP REST binding, while the payment handler and blockchain details remain TRON-specific.
 
-- the repo is implementing the checkout idea in a simpler, demo-specific way
-- it is not a drop-in implementation of the full current UCP REST binding
+## 14. Complete One-Sentence Summary
 
-## 13. Complete One-Sentence Summary
+In this repository, the merchant publishes an official-style UCP business profile and checkout-session REST service, the agent discovers that service through HTTP `402` and `/.well-known/ucp`, completes a checkout session, settles the payment by broadcasting a TRC20 USDT transfer on TRON Nile, submits the transaction hash as a blockchain receipt, and then uses that verified receipt to unlock the protected API.
 
-In this repository, UCP is used as the machine-readable commerce handshake that tells the agent what to pay and how to proceed, while TRON is the settlement rail that actually moves the USDT on-chain, and the transaction hash becomes the receipt used to unlock the protected API.
-
-## 14. Official Source Links
+## 15. Official Source Links
 
 ### UCP
 
@@ -850,15 +956,16 @@ In this repository, UCP is used as the machine-readable commerce handshake that 
 
 - TRON resource model, Energy, and Bandwidth: https://developers.tron.network/docs/resource-model
 - TronWeb `triggerSmartContract` reference: https://developers.tron.network/v4.4.0/reference/tronweb-triggersmartcontract
-- TRON `fee_limit` FAQ: https://developers.tron.network/docs/faq
+- TRON FAQ including fee and execution guidance: https://developers.tron.network/docs/faq
 
-## 15. Recommended Reading Order
+## 16. Recommended Reading Order
 
 If you are new to this topic, read in this order:
 
-1. Section 1 and Section 2 for the basic idea
-2. Section 4 for the terminology
-3. Section 6 for the full request-by-request flow
-4. Section 7 and Section 8 for the concrete code behavior
-5. Section 10 for the TRON fee model
-6. Section 14 for the official docs
+1. Section 1 and Section 2 for the core model
+2. Section 4 for terminology
+3. Section 5 for endpoint roles
+4. Section 6 for the full request-by-request flow
+5. Section 7, Section 8, and Section 9 for the concrete code behavior
+6. Section 10 and Section 11 for approval and fees
+7. Section 15 for the official docs

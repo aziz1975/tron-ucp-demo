@@ -510,14 +510,14 @@
               <div class="step-icon">2</div>
               <div class="step-content">
                 <h4>Agent reads the manifest</h4>
-                <p>The agent fetches <code>GET /.well-known/ucp</code> — the JSON shown above — and learns what currency you accept, on which network, and where to send funds.</p>
+                <p>The agent fetches <code>GET /.well-known/ucp</code> and reads the business profile, service endpoint, official checkout capability, and TRON payment handler metadata.</p>
               </div>
             </div>
             <div class="sim-step" data-step="2">
               <div class="step-icon">3</div>
               <div class="step-content">
                 <h4>Agent creates a checkout session</h4>
-                <p>Using the manifest data, the agent calls <code>POST /api/ucp/checkout/create</code> with the items it wants to purchase. Your gateway freezes the order until you approve via Telegram.</p>
+                <p>Using the business profile, the agent calls <code>POST /ucp/v1/checkout-sessions</code> with the requested line items. Your gateway freezes the order until you approve via Telegram.</p>
               </div>
             </div>
             <div class="sim-step" data-step="3">
@@ -590,7 +590,7 @@
         desc: 'A brief summary of what this gateway offers. Informational only — agents don\'t parse this.',
       },
       capabilities: {
-        desc: 'Declares what UCP actions this server supports. "dev.ucp.checkout" means it can accept structured payments.',
+        desc: 'Declares what UCP actions this server supports. The latest official checkout capability is "dev.ucp.shopping.checkout".',
       },
       payment_handler: {
         desc: 'The token standard accepted. TRC20_USDT = USDT on the TRON network via the TRC-20 smart contract.',
@@ -644,7 +644,7 @@
       list.innerHTML = '';
       for (const [key, value] of Object.entries(data)) {
         const ann = FIELD_ANNOTATIONS[key] || { desc: '' };
-        const displayValue = Array.isArray(value) ? JSON.stringify(value) : String(value);
+        const displayValue = typeof value === 'object' ? JSON.stringify(value) : Array.isArray(value) ? JSON.stringify(value) : String(value);
         const el = document.createElement('div');
         el.className = 'field-item';
         el.innerHTML = `

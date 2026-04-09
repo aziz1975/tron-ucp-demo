@@ -100,7 +100,7 @@ In under 3 minutes you now have:
 - ✅ A **Telegram 2FA firewall** — no payment goes through without your explicit tap
 - ✅ A **one-click demo agent** that runs the full checkout lifecycle end-to-end
 
-> **Ready for production?** Swap `TRON_NILE` for `TRON_MAINNET` in `server.js`, point `MERCHANT_ADDRESS` to your mainnet wallet, and you're accepting real payments.
+> **Production note:** This repo is wired for TRON Nile testnet. Moving to mainnet is not a one-line change. You would need to update the TRON node endpoints, the displayed network labels, the USDT contract address, and your merchant wallet configuration before using it for real funds.
 
 ---
 
@@ -142,9 +142,9 @@ graph TB
 
     subgraph "Merchant Side (Server)"
         C["/.well-known/ucp<br/>(UCP Manifest JSON)"]
-        D["/api/ucp/checkout/create<br/>(Session Manager)"]
-        E["/api/ucp/checkout/challenge/:id<br/>(2FA Polling Gate)"]
-        F["/api/ucp/checkout/complete<br/>(Blockchain Verifier)"]
+        D["/ucp/v1/checkout-sessions<br/>(Checkout Session Create)"]
+        E["/ucp/v1/checkout-sessions/:id<br/>(Checkout Session Polling)"]
+        F["/ucp/v1/checkout-sessions/:id/complete<br/>(Blockchain Verifier)"]
         G["/api/premium-data<br/>(Protected Resource)"]
         H["orders.json<br/>(Order State Store)"]
     end
@@ -183,21 +183,41 @@ The manifest declares:
 
 ```json
 {
-  "name": "TRON Merchant Gateway",
-  "description": "UCP-compliant payment gateway on TRON",
-  "capabilities": ["dev.ucp.checkout"],
-  "payment_handler": "TRC20_USDT",
-  "receiver_address": "TK5qfogaS3cR3rnu2awVwChhprb13obLEM",
-  "network": "TRON_NILE"
+  "name": "TRON UCP Demo Merchant",
+  "url": "http://localhost:8000",
+  "ucp": {
+    "version": "2026-01-23",
+    "services": {
+      "dev.ucp.shopping": [
+        {
+          "endpoint": "http://localhost:8000/ucp/v1"
+        }
+      ]
+    },
+    "capabilities": {
+      "dev.ucp.shopping.checkout": [
+        {
+          "version": "2026-01-23"
+        }
+      ]
+    },
+    "payment_handlers": {
+      "localhost.tron.trc20_usdt": [
+        {
+          "version": "1.0.0"
+        }
+      ]
+    }
+  }
 }
 ```
 
 | Field | Purpose |
 |---|---|
-| `capabilities` | Tells the agent what actions this server supports. `dev.ucp.checkout` means "I accept structured payments." |
-| `payment_handler` | The token standard the merchant accepts. Here, TRC20 USDT on TRON. |
-| `receiver_address` | The on-chain wallet address where funds should be sent. |
-| `network` | Which blockchain network to use. Agents use this to configure their signing client. |
+| `ucp.services.dev.ucp.shopping[0].endpoint` | Tells the agent where the checkout REST service lives. In this repo, it is `/ucp/v1`. |
+| `ucp.capabilities.dev.ucp.shopping.checkout` | Declares support for the official-style shopping checkout capability. |
+| `ucp.payment_handlers.localhost.tron.trc20_usdt` | Declares the TRON-specific payment handler used by checkout sessions in this demo. |
+| Handler `config` and payment instrument `display` fields | Carry the TRON network, token contract, receiver address, amount, and transfer state the agent needs to build a payment. |
 
 ### Why Agents Need UCP
 
@@ -205,7 +225,7 @@ Without UCP, an agent would need to be pre-programmed with every merchant's paym
 
 With UCP, **any agent can pay any merchant** by following three steps (see the [Checkout capability spec](https://ucp.dev/latest/specification/playground/) for the full schema):
 1. Read the manifest at `/.well-known/ucp`
-2. Construct a checkout session using the declared [Checkout capability](https://ucp.dev)
+2. Read the shopping service endpoint and declared [Checkout capability](https://ucp.dev)
 3. Settle the payment on the declared blockchain
 
 The protocol is transport- and blockchain-agnostic by design — it supports REST, JSON-RPC, MCP, and A2A transports out of the box ([spec details](https://github.com/Universal-Commerce-Protocol/ucp)). This implementation uses TRON, but the same manifest structure could declare Ethereum, Solana, or any other network.
@@ -238,25 +258,24 @@ sequenceDiagram
     Gateway-->>Agent: 402 Payment Required + WWW-Authenticate header
 
     Agent->>Gateway: GET /.well-known/ucp
-    Gateway-->>Agent: UCP Manifest JSON
+    Gateway-->>Agent: UCP business profile JSON
 
-    Agent->>Gateway: POST /api/ucp/checkout/create
-    Gateway-->>Agent: 202 AWAITING_2FA + poll_url
+    Agent->>Gateway: POST /ucp/v1/checkout-sessions
+    Gateway-->>Agent: 201 Checkout Session (incomplete)
     Gateway->>Human: Telegram notification with Approve / Reject
 
-    loop Agent polls every 1s
-        Agent->>Gateway: GET /api/ucp/checkout/challenge/:orderId
-        Gateway-->>Agent: 202 AWAITING_2FA
+    loop Agent polls while incomplete
+        Agent->>Gateway: GET /ucp/v1/checkout-sessions/:id
+        Gateway-->>Agent: Checkout Session with transfer_state
     end
 
     Human->>Gateway: Taps Approve
-    Agent->>Gateway: GET /api/ucp/checkout/challenge/:orderId
-    Gateway-->>Agent: 200 OK + Payment Challenge
+    Gateway-->>Agent: transfer_state = ready_for_transfer
 
     Agent->>TRON: Broadcast signed TRC20 transfer
     TRON-->>Agent: Transaction Hash
 
-    Agent->>Gateway: POST /api/ucp/checkout/complete
+    Agent->>Gateway: POST /ucp/v1/checkout-sessions/:id/complete
     Note over Gateway: Status → VERIFYING (txHash saved immediately)
 
     loop Gateway polls TRON (up to 60s)
@@ -285,31 +304,31 @@ sequenceDiagram
 | | |
 |---|---|
 | **Call** | `GET /.well-known/ucp` |
-| **Response** | JSON manifest (see above) |
-| **Intent** | The agent reads the merchant's payment schema. It learns the accepted currency (TRC20 USDT), the destination wallet, and the blockchain network. This is the machine-readable equivalent of reading a price tag. |
+| **Response** | UCP business profile JSON |
+| **Intent** | The agent reads the merchant's machine-readable business profile. It learns the checkout REST base (`/ucp/v1`), the checkout capability (`dev.ucp.shopping.checkout`), and the TRON payment handler advertised by the server. |
 
 ### Step 3 — Checkout Session Creation
 
 | | |
 |---|---|
-| **Call** | `POST /api/ucp/checkout/create` with `{ items, currency, total_amount }` |
-| **Response** | `HTTP 202 Accepted` with `{ orderId, status: "AWAITING_2FA", poll_url }` |
-| **Intent** | The agent requests to pay. The server creates an order record in `orders.json`, assigns it a unique ID, and converts the amount to SUN (TRON's base unit: 1 USDT = 1,000,000 SUN). Critically, the server does **not** return the payment challenge yet — it returns 202, meaning "I received your request but I'm not done processing it." The agent must wait. |
+| **Call** | `POST /ucp/v1/checkout-sessions` with `buyer` and `line_items` |
+| **Response** | `HTTP 201 Created` with a checkout session resource |
+| **Intent** | The agent requests to buy the premium resource. The server creates a checkout session in `orders.json`, calculates the total in base units, marks the session `AWAITING_2FA`, and returns a structured checkout resource with a selected TRON payment instrument. The payment instructions exist immediately, but the transfer state is not usable until human approval. |
 
 ### Step 4 — Human Approval (Telegram 2FA)
 
 | | |
 |---|---|
-| **Trigger** | Automatic — the server sends a Telegram message the instant the order is created |
-| **Intent** | This is the safety valve. The human wallet owner receives a push notification on their phone showing the agent's identity and the requested amount. They can tap **Approve** (releases the payment challenge to the agent) or **Reject** (permanently blocks the transaction). The agent polls `GET /api/ucp/checkout/challenge/:orderId` in a loop, receiving `202 AWAITING_2FA` until the human acts. |
+| **Trigger** | Automatic — the server sends a Telegram message or prints a local approval URL the instant the session is created |
+| **Intent** | This is the safety valve. The human wallet owner reviews the requested checkout and can approve or reject it. The agent keeps polling the checkout session resource until the selected payment instrument reports `transfer_state: "ready_for_transfer"` or the session is rejected/canceled. |
 
-### Step 5 — Payment Challenge Release
+### Step 5 — Checkout Session Polling
 
 | | |
 |---|---|
-| **Call** | `GET /api/ucp/checkout/challenge/:orderId` (after approval) |
-| **Response** | `HTTP 200` with `{ receiver_address, amount, currency, network }` |
-| **Intent** | Once approved, the gateway releases the payment challenge — a structured JSON object containing everything the agent needs to construct a valid blockchain transaction: the receiver wallet, the exact amount in SUN, and the token contract reference. |
+| **Call** | `GET /ucp/v1/checkout-sessions/:id` |
+| **Response** | `HTTP 200` with the latest checkout session state |
+| **Intent** | The agent observes the selected payment instrument over time. Before approval it sees `awaiting_human_approval`. After approval it sees `ready_for_transfer`, along with the receiver address, token contract, and amount needed to build the TRC20 transfer. |
 
 ### Step 6 — On-Chain Settlement
 
@@ -322,8 +341,8 @@ sequenceDiagram
 
 | | |
 |---|---|
-| **Call** | `POST /api/ucp/checkout/complete` with `{ orderId, transactionHash }` |
-| **Response** | `HTTP 200` with `{ status: "Success" }` |
+| **Call** | `POST /ucp/v1/checkout-sessions/:id/complete` with the payment instrument receipt |
+| **Response** | `HTTP 200` with the updated checkout session |
 | **Intent** | The agent submits proof of payment. The server immediately saves the `txHash` and sets the order status to `VERIFYING` (so the dashboard reflects progress in real time). It then polls the TRON network using `tronWeb.trx.getTransaction()` until the transaction is confirmed. Once confirmed, it verifies the transaction type (`TriggerSmartContract`) and the method signature (`a9059cbb` = ERC20/TRC20 `transfer`). If everything checks out, the order transitions to `PAID`. If the transaction reverts or times out, it transitions to `FAILED`. |
 
 ### Step 8 — Data Delivery
@@ -348,15 +367,18 @@ A flat-file JSON database managed by `db.js`. Each order record tracks the full 
 
 ```json
 {
-  "id": "ORD-1774634368477-727",
-  "items": [{ "id": "premium-data-access" }],
-  "total_amount": 15,
-  "amount_in_sun": 15000000,
+  "id": "chk_1744040000000_123",
+  "merchant_order_id": "ord_chk_1744040000000_123",
+  "payment_instrument_id": "pi_chk_1744040000000_123",
+  "buyer": { "id": "agent-abc123", "type": "autonomous_agent" },
+  "line_items": [{ "id": "li_1" }],
+  "total_amount": "15.000000",
+  "amount_in_base_units": 15000000,
   "currency": "USDT",
   "status": "PAID",
   "txHash": "94943ca4b465d7b5...",
-  "createdAt": "2025-03-27T17:39:28.477Z",
-  "updatedAt": "2025-03-27T17:40:12.103Z"
+  "createdAt": "2026-04-07T14:00:00.000Z",
+  "updatedAt": "2026-04-07T14:00:15.000Z"
 }
 ```
 
@@ -370,10 +392,11 @@ A flat-file JSON database managed by `db.js`. Each order record tracks the full 
 | `PAID` | Transaction confirmed on-chain. Receipt is valid. |
 | `FAILED` | Transaction timed out or reverted on-chain. |
 | `REJECTED` | Human explicitly denied the transaction via Telegram. |
+| `CANCELED` | The checkout session was canceled before successful payment. |
 
 ### UCP Manifest (`/.well-known/ucp`)
 
-A static JSON endpoint served by the gateway. This is the entry point for any UCP-compatible agent. It advertises the merchant's payment capabilities, accepted token standards, and destination wallet. Agents discover this URL through the `WWW-Authenticate` header on 402 responses.
+A dynamic UCP business profile served by the gateway. This is the entry point for any UCP-compatible agent. It advertises the shopping service endpoint, checkout capability, and TRON payment handler metadata. Agents discover this URL through the `WWW-Authenticate` header on 402 responses.
 
 ### Telegram Bot (HITL 2FA Layer)
 
